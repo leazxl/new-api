@@ -232,6 +232,10 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 		})
 	}
 
+	// Normalize message ordering — reorder tool replies next to their tool_calls,
+	// drop orphans, merge consecutive same-role messages.
+	messages = normalizeMessages(messages)
+
 	out := &dto.GeneralOpenAIRequest{
 		Model:    req.Model,
 		Messages: messages,
@@ -277,11 +281,7 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 		var textCfg map[string]any
 		if err := common.Unmarshal(req.Text, &textCfg); err == nil {
 			if format, ok := textCfg["format"]; ok {
-				var rf dto.ResponseFormat
-				if b, err := common.Marshal(format); err == nil {
-					_ = common.Unmarshal(b, &rf)
-					out.ResponseFormat = &rf
-				}
+				out.ResponseFormat = convertTextFormatToResponseFormat(format)
 			}
 		}
 	}
@@ -292,27 +292,25 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 func convertFunctionCallItem(item map[string]any) dto.Message {
 	callID := common.Interface2String(item["call_id"])
 	name := common.Interface2String(item["name"])
-	argsStr := ""
-	if argsRaw, err := common.Marshal(item["arguments"]); err == nil {
+	argsStr := "{}"
+	if argsRaw, err := common.Marshal(item["arguments"]); err == nil && string(argsRaw) != "null" && string(argsRaw) != "" {
 		argsStr = string(argsRaw)
 	}
-	toolCalls := []dto.ToolCallRequest{
-		{
-			ID:   callID,
-			Type: "function",
-			Function: dto.FunctionRequest{
-				Name: name,
-			},
-		},
-	}
-	if argsStr != "" {
-		toolCalls[0].Function.Parameters = argsStr
-	}
+	// Use raw map to ensure "arguments" key (not "parameters" which ToolCallRequest would produce)
 	msg := dto.Message{
 		Role:    "assistant",
 		Content: nil,
 	}
-	msg.SetToolCalls(toolCalls)
+	msg.SetToolCalls([]map[string]any{
+		{
+			"id":   callID,
+			"type": "function",
+			"function": map[string]any{
+				"name":      name,
+				"arguments": argsStr,
+			},
+		},
+	})
 	return msg
 }
 
@@ -499,6 +497,114 @@ func ChatCompletionsResponseToResponsesResponse(chatResp *dto.OpenAITextResponse
 	}
 
 	return resp
+}
+
+// convertTextFormatToResponseFormat converts the Responses API `text.format` to
+// Chat Completions `response_format`. The key difference is that Responses nests
+// json_schema fields flat (name, schema, strict at the top level) while Chat
+// Completions wraps them under a `json_schema` key.
+func convertTextFormatToResponseFormat(format any) *dto.ResponseFormat {
+	var fmtMap map[string]any
+	switch v := format.(type) {
+	case map[string]any:
+		fmtMap = v
+	default:
+		b, err := common.Marshal(format)
+		if err != nil {
+			return nil
+		}
+		_ = common.Unmarshal(b, &fmtMap)
+	}
+	if fmtMap == nil {
+		return nil
+	}
+
+	rf := &dto.ResponseFormat{}
+	rf.Type = common.Interface2String(fmtMap["type"])
+
+	if rf.Type == "json_schema" {
+		js := make(map[string]any)
+		if name := common.Interface2String(fmtMap["name"]); name != "" {
+			js["name"] = name
+		}
+		if schema, ok := fmtMap["schema"]; ok && schema != nil {
+			js["schema"] = schema
+		}
+		if strict, ok := fmtMap["strict"]; ok {
+			js["strict"] = strict
+		}
+		rf.JsonSchema, _ = common.Marshal(js)
+	}
+
+	return rf
+}
+
+// normalizeMessages reorders tool messages to follow their tool_calls immediately,
+// drops orphan tool messages, and merges consecutive same-role messages.
+// Mirrors codex-bridge's normalizeMessages for DeepSeek compatibility.
+func normalizeMessages(msgs []dto.Message) []dto.Message {
+	// Pass 1: re-order tool replies adjacent to their tool_calls.
+	work := make([]dto.Message, len(msgs))
+	copy(work, msgs)
+	fixed := make([]dto.Message, 0, len(work))
+
+	for i := range work {
+		msg := work[i]
+		if msg.Role == "assistant" && len(msg.ParseToolCalls()) > 0 {
+			fixed = append(fixed, msg)
+			callIds := make(map[string]bool)
+			for _, tc := range msg.ParseToolCalls() {
+				callIds[tc.ID] = true
+			}
+			for j := i + 1; j < len(work); j++ {
+				if work[j].Role == "tool" && callIds[work[j].ToolCallId] {
+					fixed = append(fixed, work[j])
+					work[j] = dto.Message{Role: ""} // mark as consumed
+				}
+			}
+		} else if msg.Role == "tool" {
+			// Don't add orphan tool messages here; handled in pass 3.
+			continue
+		} else if msg.Role != "" {
+			fixed = append(fixed, msg)
+		}
+	}
+
+	// Pass 2: merge consecutive same-role messages.
+	merged := make([]dto.Message, 0, len(fixed))
+	for i, msg := range fixed {
+		if i > 0 {
+			prev := merged[len(merged)-1]
+			if prev.Role == msg.Role {
+				if prev.Role == "user" || prev.Role == "assistant" {
+					if !hasToolCalls(prev) && !hasToolCalls(msg) {
+						merged[len(merged)-1].Content = concatContent(prev.Content, msg.Content)
+						continue
+					}
+				}
+			}
+			// Drop text-only assistant message following tool_calls
+			if prev.Role == "assistant" && hasToolCalls(prev) && msg.Role == "assistant" && !hasToolCalls(msg) {
+				continue
+			}
+		}
+		merged = append(merged, msg)
+	}
+
+	return merged
+}
+
+func hasToolCalls(m dto.Message) bool {
+	return len(m.ParseToolCalls()) > 0
+}
+
+func concatContent(a, b any) any {
+	sa, aStr := a.(string)
+	sb, bStr := b.(string)
+	if aStr && bStr {
+		return sa + "\n\n" + sb
+	}
+	return b
 }
 
 func convertCreatedToInt(v any) int {

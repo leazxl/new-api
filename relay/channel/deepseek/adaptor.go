@@ -173,6 +173,22 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		return nil, err
 	}
 
+	// DeepSeek thinking mode requires reasoning_content to be passed back for
+	// multi-turn tool-call conversations. Codex CLI doesn't preserve it, so
+	// force disable thinking when the history contains tool_calls without it.
+	hasAssistantToolCalls := false
+	for _, m := range chatReq.Messages {
+		if m.Role == "assistant" && len(m.ParseToolCalls()) > 0 {
+			hasAssistantToolCalls = true
+			break
+		}
+	}
+	if hasAssistantToolCalls {
+		thinkingData, _ := common.Marshal(map[string]string{"type": "disabled"})
+		chatReq.THINKING = thinkingData
+		chatReq.ReasoningEffort = ""
+	}
+
 	// Switch to chat completions mode for the rest of the pipeline.
 	info.RelayMode = constant.RelayModeChatCompletions
 	info.AppendRequestConversion(types.RelayFormatOpenAI)
@@ -182,6 +198,14 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
 	return channel.DoApiRequest(a, c, info, requestBody)
+}
+
+type toolCallStreamState struct {
+	id     string
+	callId string
+	name   string
+	args   string
+	outIdx int
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
@@ -241,71 +265,26 @@ func responsesViaChatStreamDoResponse(c *gin.Context, resp *http.Response, info 
 
 	responseId := info.RequestId
 	model := info.UpstreamModelName
-	msgItemId := "msg_" + responseId
 	var (
 		usage          = &dto.Usage{}
 		streamErr      *types.NewAPIError
 		sentPreamble   bool
-		sentTextItem   bool
-		sentReasonItem bool
+		messageStarted bool
+		outputIndex    int
+		textOutputIdx  = -1
+		toolCalls      = make(map[int]*toolCallStreamState)
 	)
 
-	sendPreamble := func(sr *helper.StreamResult) {
+	sendPreamble := func() {
 		if sentPreamble {
 			return
 		}
 		sentPreamble = true
-
-		// response.created
-		createdResp := dto.OpenAIResponsesResponse{
-			ID:     responseId,
-			Object: "response",
-			Model:  model,
-		}
-		jd, _ := common.Marshal(dto.ResponsesStreamResponse{Type: "response.created", Response: &createdResp})
+		baseResp := dto.OpenAIResponsesResponse{ID: responseId, Object: "response", Model: model}
+		jd, _ := common.Marshal(dto.ResponsesStreamResponse{Type: "response.created", Response: &baseResp})
 		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.created"}, string(jd))
-
-		// response.in_progress
-		jd, _ = common.Marshal(dto.ResponsesStreamResponse{Type: "response.in_progress", Response: &createdResp})
+		jd, _ = common.Marshal(dto.ResponsesStreamResponse{Type: "response.in_progress", Response: &baseResp})
 		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.in_progress"}, string(jd))
-	}
-
-	sendTextPreamble := func(sr *helper.StreamResult) {
-		sendPreamble(sr)
-		if sentTextItem {
-			return
-		}
-		sentTextItem = true
-
-		// response.output_item.added (message)
-		item := dto.ResponsesOutput{Type: "message", ID: msgItemId, Role: "assistant", Status: "in_progress"}
-		jd, _ := common.Marshal(dto.ResponsesStreamResponse{Type: "response.output_item.added", Item: &item, OutputIndex: common.GetPointer(0)})
-		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_item.added"}, string(jd))
-
-		// response.content_part.added (output_text)
-		part := dto.ResponsesOutputContent{Type: "output_text", Text: ""}
-		cpEvt := map[string]any{
-			"type":         "response.content_part.added",
-			"item_id":      msgItemId,
-			"output_index": 0,
-			"content_index": 0,
-			"part":         part,
-		}
-		jd, _ = common.Marshal(cpEvt)
-		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.content_part.added"}, string(jd))
-	}
-
-	sendReasonPreamble := func(sr *helper.StreamResult) {
-		sendPreamble(sr)
-		if sentReasonItem {
-			return
-		}
-		sentReasonItem = true
-
-		// response.output_item.added (reasoning)
-		item := dto.ResponsesOutput{Type: "reasoning_summary_text", ID: "rs_" + responseId, Status: "in_progress"}
-		jd, _ := common.Marshal(dto.ResponsesStreamResponse{Type: "response.output_item.added", Item: &item, OutputIndex: common.GetPointer(0)})
-		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_item.added"}, string(jd))
 	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
@@ -338,66 +317,83 @@ func responsesViaChatStreamDoResponse(c *gin.Context, resp *http.Response, info 
 
 		delta := choice.Delta
 
+		// Skip reasoning_content — Codex CLI doesn't handle reasoning events.
+		// (Matches codex-bridge behavior.)
+
+		if delta.ToolCalls != nil {
+			sendPreamble()
+			for _, tc := range delta.ToolCalls {
+				idx := 0
+				if tc.Index != nil {
+					idx = *tc.Index
+				}
+				state, exists := toolCalls[idx]
+				if !exists {
+					callId := tc.ID
+					fcId := "fc_" + common.GetUUID()
+					state = &toolCallStreamState{
+						id: fcId, callId: callId, name: tc.Function.Name,
+						outIdx: outputIndex,
+					}
+					toolCalls[idx] = state
+					outputIndex++
+					jd, _ := common.Marshal(map[string]any{
+						"type":         "response.output_item.added",
+						"output_index": state.outIdx,
+						"item": map[string]any{
+							"type": "function_call", "id": fcId, "call_id": callId,
+							"name": tc.Function.Name, "arguments": "", "status": "in_progress",
+						},
+					})
+					helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_item.added"}, string(jd))
+				}
+				if tc.Function.Arguments != "" {
+					state.args += tc.Function.Arguments
+					jd, _ := common.Marshal(map[string]any{
+						"type":         "response.function_call_arguments.delta",
+						"output_index": state.outIdx, "call_id": state.callId,
+						"delta":        tc.Function.Arguments,
+					})
+					helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.function_call_arguments.delta"}, string(jd))
+				}
+			}
+			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				completeStream(c, responseId, model, usage, &messageStarted, &textOutputIdx, toolCalls, &outputIndex, choice.FinishReason)
+			}
+			return
+		}
+
 		if delta.Content != nil && *delta.Content != "" {
-			sendTextPreamble(sr)
-			jd, _ := common.Marshal(dto.ResponsesStreamResponse{Type: "response.output_text.delta", Delta: *delta.Content, ItemID: msgItemId, OutputIndex: common.GetPointer(0), ContentIndex: common.GetPointer(0)})
+			text := *delta.Content
+			if !messageStarted {
+				sendPreamble()
+				messageStarted = true
+				textOutputIdx = outputIndex
+				outputIndex++
+				jd, _ := common.Marshal(map[string]any{
+					"type":         "response.output_item.added",
+					"output_index": textOutputIdx,
+					"item": map[string]any{
+						"type": "message", "id": "msg_" + common.GetUUID(),
+						"status": "in_progress", "role": "assistant", "content": []any{},
+					},
+				})
+				helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_item.added"}, string(jd))
+				jd, _ = common.Marshal(map[string]any{
+					"type": "response.content_part.added", "output_index": textOutputIdx,
+					"content_index": 0, "part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
+				})
+				helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.content_part.added"}, string(jd))
+			}
+			jd, _ := common.Marshal(map[string]any{
+				"type": "response.output_text.delta", "output_index": textOutputIdx,
+				"content_index": 0, "delta": text,
+			})
 			helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_text.delta"}, string(jd))
 		}
 
-		if delta.ReasoningContent != nil && *delta.ReasoningContent != "" {
-			sendReasonPreamble(sr)
-			jd, _ := common.Marshal(dto.ResponsesStreamResponse{Type: "response.reasoning_summary_text.delta", Delta: *delta.ReasoningContent})
-			helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.reasoning_summary_text.delta"}, string(jd))
-		}
-
-		for _, tc := range delta.ToolCalls {
-			if tc.Function.Name != "" {
-				sendPreamble(sr)
-				jd, _ := common.Marshal(dto.ResponsesStreamResponse{
-					Type:   "response.output_item.added",
-					ItemID: tc.ID,
-					Item:   &dto.ResponsesOutput{Type: "function_call", CallId: tc.ID, ID: tc.ID, Name: tc.Function.Name},
-				})
-				helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_item.added"}, string(jd))
-			}
-			if tc.Function.Arguments != "" {
-				jd, _ := common.Marshal(dto.ResponsesStreamResponse{Type: "response.function_call_arguments.delta", ItemID: tc.ID, Delta: tc.Function.Arguments})
-				helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.function_call_arguments.delta"}, string(jd))
-			}
-		}
-
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
-			// Close items before completing
-			if sentTextItem {
-				jd, _ := common.Marshal(map[string]any{
-					"type": "response.content_part.done", "item_id": msgItemId,
-					"output_index": 0, "content_index": 0,
-					"part": dto.ResponsesOutputContent{Type: "output_text", Text: ""},
-				})
-				helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.content_part.done"}, string(jd))
-				jd, _ = common.Marshal(map[string]any{
-					"type": "response.output_item.done", "item": map[string]any{
-						"type": "message", "id": msgItemId, "role": "assistant", "status": "completed",
-					}, "output_index": 0,
-				})
-				helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_item.done"}, string(jd))
-			}
-			if sentReasonItem {
-				jd, _ := common.Marshal(map[string]any{
-					"type": "response.output_item.done", "item": map[string]any{
-						"type": "reasoning_summary_text", "id": "rs_" + responseId, "status": "completed",
-					}, "output_index": 0,
-				})
-				helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_item.done"}, string(jd))
-			}
-			completedResp := dto.OpenAIResponsesResponse{
-				ID:     responseId,
-				Object: "response",
-				Model:  model,
-				Usage:  usage,
-			}
-			jd, _ := common.Marshal(dto.ResponsesStreamResponse{Type: "response.completed", Response: &completedResp})
-			helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.completed"}, string(jd))
+			completeStream(c, responseId, model, usage, &messageStarted, &textOutputIdx, toolCalls, &outputIndex, choice.FinishReason)
 		}
 	})
 
@@ -413,6 +409,87 @@ func responsesViaChatStreamDoResponse(c *gin.Context, resp *http.Response, info 
 	return usage, nil
 }
 
+func completeStream(c *gin.Context, responseId string, model string, usage *dto.Usage, messageStarted *bool, textOutputIdx *int, toolCalls map[int]*toolCallStreamState, outputIndex *int, finishReason *string) {
+	// Finalize tool calls
+	for _, state := range toolCalls {
+		jd, _ := common.Marshal(map[string]any{
+			"type": "response.function_call_arguments.done", "output_index": state.outIdx,
+			"call_id": state.callId, "arguments": state.args,
+		})
+		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.function_call_arguments.done"}, string(jd))
+		jd, _ = common.Marshal(map[string]any{
+			"type": "response.output_item.done", "output_index": state.outIdx,
+			"item": map[string]any{
+				"type": "function_call", "id": state.id, "call_id": state.callId,
+				"name": state.name, "arguments": state.args, "status": "completed",
+			},
+		})
+		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_item.done"}, string(jd))
+	}
+
+	// Finalize message
+	if *messageStarted && *textOutputIdx >= 0 {
+		jd, _ := common.Marshal(map[string]any{
+			"type": "response.output_text.done", "output_index": *textOutputIdx, "content_index": 0,
+		})
+		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_text.done"}, string(jd))
+		jd, _ = common.Marshal(map[string]any{
+			"type": "response.content_part.done", "output_index": *textOutputIdx,
+			"content_index": 0, "part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
+		})
+		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.content_part.done"}, string(jd))
+		jd, _ = common.Marshal(map[string]any{
+			"type": "response.output_item.done", "output_index": *textOutputIdx,
+			"item": map[string]any{
+				"type": "message", "id": "msg_" + common.GetUUID(),
+				"status": "completed", "role": "assistant", "content": []any{},
+			},
+		})
+		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_item.done"}, string(jd))
+	}
+
+	status := "completed"
+	finishReasonStr := ""
+	if finishReason != nil {
+		finishReasonStr = *finishReason
+	}
+	if finishReasonStr == "length" {
+		status = "incomplete"
+	}
+
+	completedResp := dto.OpenAIResponsesResponse{
+		ID:     responseId,
+		Object: "response",
+		Model:  model,
+		Usage:  usage,
+	}
+	completedResp.Status, _ = common.Marshal(status)
+	jd, _ := common.Marshal(map[string]any{
+		"type": "response.completed",
+		"response": map[string]any{
+			"id":         responseId,
+			"object":     "response",
+			"status":     status,
+			"model":      model,
+			"usage":      translateUsageForStream(usage),
+		},
+	})
+	helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.completed"}, string(jd))
+}
+
+func translateUsageForStream(u *dto.Usage) map[string]any {
+	return map[string]any{
+		"input_tokens":  u.PromptTokens,
+		"output_tokens": u.CompletionTokens,
+		"total_tokens":  u.TotalTokens,
+		"input_tokens_details": map[string]any{
+			"cached_tokens": u.PromptTokensDetails.CachedTokens,
+		},
+		"output_tokens_details": map[string]any{
+			"reasoning_tokens": u.CompletionTokenDetails.ReasoningTokens,
+		},
+	}
+}
 func (a *Adaptor) GetModelList() []string {
 	return ModelList
 }

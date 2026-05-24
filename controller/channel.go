@@ -1010,6 +1010,10 @@ func FetchModels(c *gin.Context) {
 	if baseURL == "" {
 		baseURL = constant.ChannelBaseURLs[req.Type]
 	}
+	// resolve special base URLs (e.g. kimi-coding-plan, glm-coding-plan)
+	if special, ok := constant.ChannelSpecialBases[baseURL]; ok && special.OpenAIBaseURL != "" {
+		baseURL = special.OpenAIBaseURL
+	}
 
 	// remove line breaks and extra spaces.
 	key := strings.TrimSpace(req.Key)
@@ -1055,7 +1059,16 @@ func FetchModels(c *gin.Context) {
 	}
 
 	client := &http.Client{}
-	url := fmt.Sprintf("%s/v1/models", baseURL)
+	// determine models endpoint path from channel type or special base config
+	modelsPath := constant.ChannelModelsPaths[req.Type]
+	if modelsPath == "" {
+		if special, ok := constant.ChannelSpecialBases[req.BaseURL]; ok && special.ModelsPath != "" {
+			modelsPath = special.ModelsPath
+		} else {
+			modelsPath = "/v1/models"
+		}
+	}
+	url := fmt.Sprintf("%s%s", baseURL, modelsPath)
 
 	request, err := http.NewRequest("GET", url, nil)
 	if err != nil {

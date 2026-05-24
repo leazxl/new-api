@@ -75,6 +75,11 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 	req.Set("Authorization", fmt.Sprintf("Bearer %s", info.ApiKey))
+	if special, ok := channelconstant.ChannelSpecialBases[info.ChannelBaseUrl]; ok {
+		for k, v := range special.ExtraHeaders {
+			req.Set(k, v)
+		}
+	}
 	return nil
 }
 

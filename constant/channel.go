@@ -120,6 +120,10 @@ var ChannelBaseURLs = []string{
 	"https://chatgpt.com",                       //57
 }
 
+var ChannelModelsPaths = map[int]string{
+	ChannelTypeVolcEngine: "/api/v3/models",
+}
+
 var ChannelTypeNames = map[int]string{
 	ChannelTypeUnknown:        "Unknown",
 	ChannelTypeOpenAI:         "OpenAI",
@@ -187,23 +191,32 @@ func GetChannelTypeName(channelType int) string {
 type ChannelSpecialBase struct {
 	ClaudeBaseURL string
 	OpenAIBaseURL string
+	ModelsPath    string            // optional: models endpoint path, defaults to /v1/models
+	ExtraHeaders  map[string]string // optional: extra HTTP headers for all requests
 }
 
 var ChannelSpecialBases = map[string]ChannelSpecialBase{
 	"glm-coding-plan": {
 		ClaudeBaseURL: "https://open.bigmodel.cn/api/anthropic",
 		OpenAIBaseURL: "https://open.bigmodel.cn/api/coding/paas/v4",
+		ModelsPath:    "/models",
 	},
 	"glm-coding-plan-international": {
 		ClaudeBaseURL: "https://api.z.ai/api/anthropic",
 		OpenAIBaseURL: "https://api.z.ai/api/coding/paas/v4",
+		ModelsPath:    "/models",
 	},
 	"kimi-coding-plan": {
 		ClaudeBaseURL: "https://api.kimi.com/coding",
 		OpenAIBaseURL: "https://api.kimi.com/coding/v1",
+		ModelsPath:    "/models",
+		ExtraHeaders: map[string]string{
+			"User-Agent": "KimiCLI/1.44.0",
+		},
 	},
 	"doubao-coding-plan": {
 		ClaudeBaseURL: "https://ark.cn-beijing.volces.com/api/coding",
 		OpenAIBaseURL: "https://ark.cn-beijing.volces.com/api/coding/v3",
+		ModelsPath:    "/models",
 	},
 }

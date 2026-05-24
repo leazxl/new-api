@@ -286,7 +286,11 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
-
+	if special, ok := channelconstant.ChannelSpecialBases[info.ChannelBaseUrl]; ok {
+		for k, v := range special.ExtraHeaders {
+			req.Set(k, v)
+		}
+	}
 	if info.RelayMode == constant.RelayModeAudioSpeech {
 		parts := strings.Split(info.ApiKey, "|")
 		if len(parts) == 2 {

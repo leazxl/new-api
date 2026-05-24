@@ -520,6 +520,42 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	return token
 }
 
+type TokenStat struct {
+	TokenId   int    `json:"token_id"`
+	TokenName string `json:"token_name"`
+	Quota     int    `json:"quota"`
+	Count     int    `json:"count"`
+	Tokens    int    `json:"tokens"`
+}
+
+func SumUsedQuotaGroupByToken(userId int, startTimestamp int64, endTimestamp int64, modelName string) (stats []TokenStat, err error) {
+	selectExpr := "token_id, token_name, sum(quota) as quota, count(*) as count"
+	if common.UsingPostgreSQL {
+		selectExpr += ", coalesce(sum(prompt_tokens),0) + coalesce(sum(completion_tokens),0) as tokens"
+	} else {
+		selectExpr += ", ifnull(sum(prompt_tokens),0) + ifnull(sum(completion_tokens),0) as tokens"
+	}
+
+	tx := LOG_DB.Table("logs").
+		Select(selectExpr).
+		Where("user_id = ?", userId).
+		Where("type = ?", LogTypeConsume).
+		Where("token_name != ''")
+
+	if startTimestamp != 0 {
+		tx = tx.Where("created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		tx = tx.Where("created_at <= ?", endTimestamp)
+	}
+	if modelName != "" {
+		tx = tx.Where("model_name = ?", modelName)
+	}
+
+	err = tx.Group("token_id, token_name").Order("quota desc").Scan(&stats).Error
+	return stats, err
+}
+
 func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
 	var total int64 = 0
 

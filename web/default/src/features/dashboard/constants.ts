@@ -61,6 +61,12 @@ export const MODEL_ANALYTICS_CHART_OPTIONS = [
   { value: 'top', labelKey: 'Call Count Ranking' },
 ] as const
 
+export const KEY_ANALYTICS_CHART_OPTIONS = [
+  { value: 'trend', labelKey: 'Key Trend' },
+  { value: 'proportion', labelKey: 'Key Distribution' },
+  { value: 'top', labelKey: 'Key Ranking' },
+] as const
+
 export const EMPTY_DASHBOARD_FILTERS: DashboardFilters = {
   start_timestamp: undefined,
   end_timestamp: undefined,

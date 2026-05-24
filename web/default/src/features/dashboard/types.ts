@@ -33,6 +33,14 @@ export interface QuotaDataItem {
   quota?: number
 }
 
+export interface TokenStat {
+  token_id: number
+  token_name: string
+  quota: number
+  count: number
+  tokens: number
+}
+
 // ============================================================================
 // Uptime Monitoring Types
 // ============================================================================

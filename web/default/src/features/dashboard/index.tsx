@@ -43,6 +43,7 @@ import {
   type DashboardChartPreferences,
   type DashboardFilters,
   type QuotaDataItem,
+  type TokenStat,
 } from './types'
 
 const route = getRouteApi('/_authenticated/dashboard/$section')
@@ -77,6 +78,18 @@ const LazyUserCharts = lazy(() =>
   }))
 )
 
+const LazyKeyStatCards = lazy(() =>
+  import('./components/keys/key-stat-cards').then((m) => ({
+    default: m.KeyStatCards,
+  }))
+)
+
+const LazyKeyCharts = lazy(() =>
+  import('./components/keys/key-charts').then((m) => ({
+    default: m.KeyCharts,
+  }))
+)
+
 function LogStatCardsFallback() {
   return (
     <div className='overflow-hidden rounded-lg border'>
@@ -94,6 +107,20 @@ function LogStatCardsFallback() {
 }
 
 function ModelChartsFallback() {
+  return (
+    <div className='overflow-hidden rounded-lg border'>
+      <div className='flex items-center justify-between border-b px-4 py-3 sm:px-5'>
+        <Skeleton className='h-5 w-32' />
+        <Skeleton className='h-8 w-72' />
+      </div>
+      <div className='h-96 p-2'>
+        <Skeleton className='h-full w-full' />
+      </div>
+    </div>
+  )
+}
+
+function KeyChartsFallback() {
   return (
     <div className='overflow-hidden rounded-lg border'>
       <div className='flex items-center justify-between border-b px-4 py-3 sm:px-5'>
@@ -142,6 +169,10 @@ const SECTION_META: Record<
     titleKey: 'Model Call Analytics',
     descriptionKey: 'View model call count analytics and charts',
   },
+  keys: {
+    titleKey: 'Key Analytics',
+    descriptionKey: 'View per-key usage analytics and charts',
+  },
   users: {
     titleKey: 'User Analytics',
     descriptionKey: 'View user consumption statistics and charts',
@@ -158,6 +189,8 @@ export function Dashboard() {
 
   const [modelData, setModelData] = useState<QuotaDataItem[]>([])
   const [dataLoading, setDataLoading] = useState(false)
+  const [keyData, setKeyData] = useState<TokenStat[]>([])
+  const [keyDataLoading, setKeyDataLoading] = useState(false)
   const [chartPreferences, setChartPreferences] =
     useState<DashboardChartPreferences>(() => getSavedChartPreferences())
   const [modelFilters, setModelFilters] = useState<DashboardFilters>(() =>
@@ -176,6 +209,14 @@ export function Dashboard() {
     (data: QuotaDataItem[], loading: boolean) => {
       setModelData(data)
       setDataLoading(loading)
+    },
+    []
+  )
+
+  const handleKeyDataUpdate = useCallback(
+    (data: TokenStat[], loading: boolean) => {
+      setKeyData(data)
+      setKeyDataLoading(loading)
     },
     []
   )
@@ -210,7 +251,7 @@ export function Dashboard() {
   const showSectionTabs =
     activeSection !== 'overview' && visibleSections.length > 1
   const modelActions =
-    activeSection === 'models' ? (
+    activeSection === 'models' || activeSection === 'keys' ? (
       <>
         <ModelsChartPreferences
           preferences={chartPreferences}
@@ -295,6 +336,26 @@ export function Dashboard() {
                     timeGranularity={
                       modelFilters.time_granularity || DEFAULT_TIME_GRANULARITY
                     }
+                  />
+                </Suspense>
+              </FadeIn>
+            </>
+          )}
+          {activeSection === 'keys' && (
+            <>
+              <FadeIn>
+                <Suspense fallback={<LogStatCardsFallback />}>
+                  <LazyKeyStatCards
+                    filters={modelFilters}
+                    onDataUpdate={handleKeyDataUpdate}
+                  />
+                </Suspense>
+              </FadeIn>
+              <FadeIn delay={0.1}>
+                <Suspense fallback={<KeyChartsFallback />}>
+                  <LazyKeyCharts
+                    data={keyData}
+                    loading={keyDataLoading}
                   />
                 </Suspense>
               </FadeIn>

@@ -1,0 +1,213 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+  /* Editorial serif token — the body face used by the `serif` font axis
+   * and by presets that opt in (currently Anthropic). Lora carries only
+   * Latin glyphs, so the stack walks through CJK serifs (Noto / Source Han
+   * / Songti / SimSun) before the generic `serif` fallback. Without these
+   * explicit CJK fonts the browser's generic-serif pick on Windows is
+   * non-deterministic at small sizes and often appears sans-like. */
+  --font-serif:
+    'Lora Variable', 'Lora', 'Source Serif Pro', 'Source Serif 4',
+    'Noto Serif SC', 'Noto Serif TC', 'Noto Serif JP', 'Noto Serif KR',
+    'Source Han Serif SC', 'Source Han Serif TC', 'Source Han Serif',
+    'Songti SC', 'STSong', 'STSongti-SC-Regular', 'PingFang SC', 'SimSun',
+    'NSimSun', '宋体', 'FangSong', '仿宋', 'KaiTi', '楷体', Georgia,
+    'Times New Roman', Cambria, 'Liberation Serif', serif;
+  --font-inter:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
+    'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  --font-manrope:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
+    'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-neutral: var(--neutral);
+  --color-neutral-foreground: var(--neutral-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* ── PURESNAKE color palette (default) ─────────────────────────────────
+ * Light mode: white canvas with brand green accents.
+ * Colors derived from DESIGN.md v0.3-draft:
+ *   BrandGreen-new #06D290 · BrandBlue #26273A · Snake-red #FE0832
+ *   SnakeRed #FF3367 · Pupple1 #7A3BFF · Blue1 #2D57E7 · Warning #FF6A0C
+ *   3Grey1 #707184 · 3Grey2 #B1B2C1 · 3Grey3 #DBDCE2 · 3Grey4 #E8E8E8 · 3Grey5 #F6F6F6
+ *   Text-1 #0F1113 · Text-2 #404155 · Disabled #D0D3D5
+ */
+:root {
+  --radius: 0.125rem;
+  --app-header-height: 3rem;
+  /* Static build-channel fallback consumed when JS hasn't booted yet. */
+  --app-rev: '2k6e8r7p';
+  /* Currently active body font. The font axis swaps this between
+   * `--font-sans` and `--font-serif` via `[data-theme-font='...']` blocks
+   * in theme-presets.css. Default mirrors `--font-sans` so behavior is
+   * identical when no font preference is set. */
+  --font-body: var(--font-sans);
+  /* Brand core */
+  --background: #FFFFFF;
+  --foreground: #0F1113;
+  --card: #FFFFFF;
+  --card-foreground: #0F1113;
+  --popover: #FFFFFF;
+  --popover-foreground: #0F1113;
+  --primary: #06D290;
+  --primary-foreground: #FFFFFF;
+  --secondary: #F6F6F6;
+  --secondary-foreground: #26273A;
+  --muted: #F6F6F6;
+  --muted-foreground: #707184;
+  --accent: #F6F6F6;
+  --accent-foreground: #26273A;
+  /* Semantic */
+  --destructive: #FE0832;
+  --destructive-foreground: #FFFFFF;
+  --success: #06D290;
+  --success-foreground: #FFFFFF;
+  --warning: #FF6A0C;
+  --warning-foreground: #0F1113;
+  --info: #2D57E7;
+  --info-foreground: #FFFFFF;
+  --neutral: #B1B2C1;
+  --neutral-foreground: #0F1113;
+  /* Borders & inputs */
+  --border: #E8E8E8;
+  --input: #E8E8E8;
+  --ring: #06D290;
+  /* Charts */
+  --chart-1: #06D290;
+  --chart-2: #2D57E7;
+  --chart-3: #7A3BFF;
+  --chart-4: #FF6A0C;
+  --chart-5: #FE0832;
+  /* Sidebar */
+  --sidebar: #F6F6F6;
+  --sidebar-foreground: #0F1113;
+  --sidebar-primary: #26273A;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #E8E8E8;
+  --sidebar-accent-foreground: #26273A;
+  --sidebar-border: #E8E8E8;
+  --sidebar-ring: #06D290;
+  /* Skeleton */
+  --skeleton-base: #F6F6F6;
+  --skeleton-highlight: #FFFFFF;
+}
+
+/* ── PURESNAKE dark mode ──────────────────────────────────────────────
+ * Dark canvas (#111111 SnakeDark) with brand green accents.
+ * Raised surfaces step up in lightness from the SnakeDark base.
+ */
+.dark {
+  --background: #111111;
+  --foreground: #FFFFFF;
+  --card: #1A1A1A;
+  --card-foreground: #FFFFFF;
+  --popover: #1E1E1E;
+  --popover-foreground: #FFFFFF;
+  --primary: #06D290;
+  --primary-foreground: #0F1113;
+  --secondary: #262626;
+  --secondary-foreground: #FFFFFF;
+  --muted: #262626;
+  --muted-foreground: #B1B2C1;
+  --accent: #2A2A2A;
+  --accent-foreground: #FFFFFF;
+  /* Semantic */
+  --destructive: #FE0832;
+  --destructive-foreground: #FFFFFF;
+  --success: #06D290;
+  --success-foreground: #0F1113;
+  --warning: #FF6A0C;
+  --warning-foreground: #0F1113;
+  --info: #2D57E7;
+  --info-foreground: #FFFFFF;
+  --neutral: #B1B2C1;
+  --neutral-foreground: #0F1113;
+  /* Borders & inputs */
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.16);
+  --ring: #06D290;
+  /* Charts */
+  --chart-1: #06D290;
+  --chart-2: #2D57E7;
+  --chart-3: #7A3BFF;
+  --chart-4: #FF6A0C;
+  --chart-5: #FE0832;
+  /* Sidebar */
+  --sidebar: #0D0D0D;
+  --sidebar-foreground: #FFFFFF;
+  --sidebar-primary: #06D290;
+  --sidebar-primary-foreground: #0F1113;
+  --sidebar-accent: #262626;
+  --sidebar-accent-foreground: #FFFFFF;
+  --sidebar-border: rgba(255, 255, 255, 0.1);
+  --sidebar-ring: #06D290;
+  /* Skeleton */
+  --skeleton-base: #262626;
+  --skeleton-highlight: #3A3A3A;
+}

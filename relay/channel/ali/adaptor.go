@@ -24,6 +24,7 @@ import (
 
 type Adaptor struct {
 	IsSyncImageModel bool
+	ResponseFormat   string
 }
 
 const aliAnthropicMessagesModelsEnv = "ALI_ANTHROPIC_MESSAGES_MODELS"
@@ -121,6 +122,10 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 			}
 		case constant.RelayModeCompletions:
 			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/completions", info.ChannelBaseUrl)
+		case constant.RelayModeAudioTranscription, constant.RelayModeAudioTranslation:
+			// DashScope ASR (e.g. qwen3-asr-flash) is served via the OpenAI-compatible
+			// chat/completions endpoint, not a Whisper-style transcription endpoint.
+			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/chat/completions", info.ChannelBaseUrl)
 		default:
 			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/chat/completions", info.ChannelBaseUrl)
 		}
@@ -132,6 +137,11 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 	req.Set("Authorization", "Bearer "+info.ApiKey)
+	if info.RelayMode == constant.RelayModeAudioTranscription || info.RelayMode == constant.RelayModeAudioTranslation {
+		// channel.SetupApiRequestHeader skips Content-Type for audio (it assumes a
+		// multipart passthrough); we send JSON to the chat/completions endpoint.
+		req.Set("Content-Type", "application/json")
+	}
 	if info.IsStream {
 		req.Set("X-DashScope-SSE", "enable")
 	}
@@ -226,8 +236,11 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
-	//TODO implement me
-	return nil, errors.New("not implemented")
+	a.ResponseFormat = request.ResponseFormat
+	if info.RelayMode != constant.RelayModeAudioTranscription && info.RelayMode != constant.RelayModeAudioTranslation {
+		return nil, fmt.Errorf("unsupported audio relay mode: %d", info.RelayMode)
+	}
+	return convertAudioToAliChatRequest(c, request)
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
@@ -256,6 +269,8 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 			err, usage = aliImageHandler(a, c, resp, info)
 		case constant.RelayModeRerank:
 			err, usage = RerankHandler(c, resp, info)
+		case constant.RelayModeAudioTranscription, constant.RelayModeAudioTranslation:
+			err, usage = aliSTTHandler(c, resp, info, a.ResponseFormat)
 		default:
 			adaptor := openai.Adaptor{}
 			usage, err = adaptor.DoResponse(c, resp, info)

@@ -84,11 +84,17 @@ func convertAudioToAliChatRequest(c *gin.Context, request dto.AudioRequest) (io.
 		return nil, fmt.Errorf("error reading audio file: %w", err)
 	}
 
+	// Many clients (curl, various SDKs) send a generic application/octet-stream
+	// for the file part. DashScope expects a real audio/* MIME in the data URI,
+	// so treat the generic type as "unknown" and fall back to extension-based
+	// detection.
 	mimeType := fileHeader.Header.Get("Content-Type")
-	if mimeType == "" {
-		mimeType = mime.TypeByExtension(filepath.Ext(fileHeader.Filename))
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		if byExt := mime.TypeByExtension(filepath.Ext(fileHeader.Filename)); byExt != "" {
+			mimeType = byExt
+		}
 	}
-	if mimeType == "" {
+	if mimeType == "" || mimeType == "application/octet-stream" {
 		mimeType = "audio/mpeg"
 	}
 	dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(audioBytes))
